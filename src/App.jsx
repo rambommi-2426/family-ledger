@@ -34,17 +34,28 @@ export default function App() {
   const [profile, setProfile] = useState(undefined);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    let settled = false;
+    // never hang on Loading: if Supabase doesn't answer in 6s, fall through to sign-in
+    const timer = setTimeout(() => { if (!settled) setSession((s) => (s === undefined ? null : s)); }, 6000);
+    supabase.auth.getSession()
+      .then(({ data }) => { settled = true; clearTimeout(timer); setSession(data.session ?? null); })
+      .catch(() => { settled = true; clearTimeout(timer); setSession(null); });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { setSession(s ?? null); setProfile(undefined); });
-    return () => sub.subscription.unsubscribe();
+    return () => { clearTimeout(timer); sub.subscription.unsubscribe(); };
   }, []);
 
   useEffect(() => {
     if (!session) { setProfile(session === null ? null : undefined); return; }
+    let active = true;
     (async () => {
-      const { data } = await supabase.from("profiles").select("*").eq("id", session.user.id).maybeSingle();
-      setProfile(data ?? null);
+      try {
+        const { data, error } = await supabase.from("profiles").select("*").eq("id", session.user.id).maybeSingle();
+        if (active) setProfile(error ? null : (data ?? null));
+      } catch (e) {
+        if (active) setProfile(null);
+      }
     })();
+    return () => { active = false; };
   }, [session]);
 
   if (session === undefined || profile === undefined) return <Center>Loading…</Center>;
